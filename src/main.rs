@@ -1,9 +1,4 @@
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::error::Error;
-use quick_xml::events::Event;
-use quick_xml::events::attributes::Attributes;
-use quick_xml::Reader;
+use std::collections::HashMap;
 use z3::{Config, Context, SatResult, Solver};
 use z3::ast::Bool;
 
@@ -14,71 +9,36 @@ enum Direction {
     Left,
 }
 
-fn is_cell(attrs: Attributes) -> Result<bool, Box<dyn Error>> {
-    for attr in attrs {
-        let attr = attr?;
-        if attr.key == b"class" && attr.value.as_ref().starts_with(b"loop-task-cell") {
-            return Ok(true)
+fn main() {
+    let mut args = std::env::args();
+    let _ = args.next();
+    let Some(width) = args.next() else {
+        eprintln!("Usage: ./slitherlink <width> <height> <puzzle>");
+        return;
+    };
+    let width = width.parse().unwrap();
+    let Some(height) = args.next() else {
+        eprintln!("Usage: ./slitherlink <width> <height> <puzzle>");
+        return;
+    };
+    let height = height.parse().unwrap();
+    let Some(puzzle) = args.next() else {
+        eprintln!("Usage: ./slitherlink <width> <height> <puzzle>");
+        return;
+    };
+    let mut cells = HashMap::new();
+    let mut idx = 0;
+    for ch in puzzle.chars() {
+        if ('0'..='3').contains(&ch) {
+            cells.insert(idx, (ch as u8) - b'0');
+            idx += 1;
+        } else {
+            idx += 1 + (ch as usize) - ('a' as usize);
         }
     }
-    Ok(false)
-}
 
-fn style(attrs: Attributes) -> Result<Cow<'_, [u8]>, Box<dyn Error>> {
-    for attr in attrs {
-        let attr = attr?;
-        if attr.key == b"style" {
-            return Ok(attr.value)
-        }
-    }
-    panic!("no style")
-}
-
-fn parse(bytes: &[u8]) -> u8 {
-    let mut val = 0;
-    for b in bytes {
-        val = 10 * val + (*b - b'0');
-    }
-    val
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut reader = Reader::from_file("/Users/twilson/code/slitherlink/slither.html")?;
-    reader.trim_text(true);
-    let mut buf = Vec::new();
     let config = Config::new();
     let context = Context::new(&config);
-    let mut cells = HashMap::new();
-    let mut width = HashSet::new();
-    let mut height = HashSet::new();
-    let mut i = 0;
-    loop {
-        match reader.read_event(&mut buf)? {
-            Event::Start(e) | Event::Empty(e) => {
-                if is_cell(e.attributes())? {
-                    i += 1;
-                    let style = style(e.attributes())?;
-                    let style = style.as_ref();
-                    for style in style.split(|&b| b == b';') {
-                        if style.starts_with(b" top:") {
-                            height.insert(String::from_utf8_lossy(style).into_owned());
-                        } else if style.starts_with(b" left:") {
-                            width.insert(String::from_utf8_lossy(style).into_owned());
-                        }
-                    }
-                }
-            }
-            Event::Text(e) => {
-                cells.insert(i - 1, parse(&e));
-            }
-            Event::End(_) | Event::CData(_) | Event::Comment(_) => {} | Event::Decl(_) | Event::PI(_) | Event::DocType(_) => continue,
-            Event::Eof => break,
-        }
-        buf.clear();
-    }
-    let width = width.len();
-    let height = height.len();
-    println!("width={}, height={}", width, height);
 
     let mut top = HashMap::new();
     let mut left = HashMap::new();
@@ -145,7 +105,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if i < height {
                 for j in 0..=width {
                     let cell = if j < width {
-                        cells.get(&(width * i + j)).map(|c| (b'0' + *c) as char).unwrap_or(' ')
+                        cells.get(&(width * i + j)).map(|c| (b'0' + c) as char).unwrap_or(' ')
                     } else {
                         ' '
                     };
@@ -295,5 +255,4 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         solver.assert(&Bool::and(&context, &min_chain).not());
     }
-    Ok(())
 }

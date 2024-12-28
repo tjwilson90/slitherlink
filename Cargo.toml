@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-quick-xml = "*"
-z3 = { version = "*", features = ["static-link-z3"] }
+z3 = { version = "0.12", features = ["static-link-z3"] }
