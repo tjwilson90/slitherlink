@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use z3::{Config, Context, SatResult, Solver};
-use z3::ast::{Ast, Bool, Int};
+use z3::ast::{Ast, Bool, BV};
 
 //   dist(0, 0) -- top(0, 0) -- dist(0, 1) -- top(0, 1) -- dist(0, 2)
 //       |                          |                          |
@@ -90,7 +90,7 @@ fn main() {
             }
             let zero = Bool::pb_eq(&ctx, &constraints, 0);
             let two = Bool::pb_eq(&ctx, &constraints, 2);
-            solver.assert(&Bool::or(&ctx, &[&zero, &two]));
+            solver.assert(&(zero | two));
             constraints.clear();
         }
     }
@@ -99,11 +99,11 @@ fn main() {
     let mut dists = HashMap::new();
     for i in 0..=height {
         for j in 0..=width {
-            dists.insert((i, j), Int::fresh_const(&ctx, ""));
+            dists.insert((i, j), BV::fresh_const(&ctx, "", 16));
         }
     }
-    let zero = Int::from_u64(&ctx, 0);
-    let one = Int::from_u64(&ctx, 1);
+    let zero = BV::from_u64(&ctx, 0, 16);
+    let one = BV::from_u64(&ctx, 1, 16);
     for i in 0..=height {
         for j in 0..=width {
             let dist = dists.get(&(i, j)).unwrap();
@@ -115,27 +115,27 @@ fn main() {
             let mut edges = Vec::with_capacity(4);
             if let Some(neighbor) = dists.get(&(i + 1, j)) {
                 let edge = left.get(&(i, j)).unwrap();
-                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
-                constraints.push(Bool::and(&ctx, &[edge, &cond]));
-                edges.push(edge.not());
+                let cond = dist._eq(&(neighbor + &one));
+                constraints.push(edge & &cond);
+                edges.push(!edge);
             }
             if let Some(neighbor) = dists.get(&(i - 1, j)) {
                 let edge = left.get(&(i - 1, j)).unwrap();
-                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
-                constraints.push(Bool::and(&ctx, &[edge, &cond]));
-                edges.push(edge.not());
+                let cond = dist._eq(&(neighbor + &one));
+                constraints.push(edge & &cond);
+                edges.push(!edge);
             }
             if let Some(neighbor) = dists.get(&(i, j + 1)) {
                 let edge = top.get(&(i, j)).unwrap();
-                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
-                constraints.push(Bool::and(&ctx, &[edge, &cond]));
-                edges.push(edge.not());
+                let cond = dist._eq(&(neighbor + &one));
+                constraints.push(edge & &cond);
+                edges.push(!edge);
             }
             if let Some(neighbor) = dists.get(&(i, j - 1)) {
                 let edge = top.get(&(i, j - 1)).unwrap();
-                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
-                constraints.push(Bool::and(&ctx, &[edge, &cond]));
-                edges.push(edge.not());
+                let cond = dist._eq(&(neighbor + &one));
+                constraints.push(edge & &cond);
+                edges.push(!edge);
             }
             let edges = edges.iter().collect::<Vec<_>>();
             constraints.push(Bool::and(&ctx, &edges));
