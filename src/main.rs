@@ -1,13 +1,20 @@
 use std::collections::HashMap;
 use z3::{Config, Context, SatResult, Solver};
-use z3::ast::Bool;
+use z3::ast::{Ast, Bool, Int};
 
-enum Direction {
-    Top,
-    Right,
-    Bottom,
-    Left,
-}
+//   dist(0, 0) -- top(0, 0) -- dist(0, 1) -- top(0, 1) -- dist(0, 2)
+//       |                          |                          |
+//       |                          |                          |
+//   left(0, 0)   cell(0, 0)    left(0, 1)   cell(0, 1)    left(0, 2)
+//       |                          |                          |
+//       |                          |                          |
+//   dist(1, 0) -- top(1, 0) -- dist(1, 1) -- top(1, 1) -- dist(1, 2)
+//       |                          |                          |
+//       |                          |                          |
+//   left(1, 0)   cell(1, 0)    left(1, 1)   cell(1, 1)    left(1, 2)
+//       |                          |                          |
+//       |                          |                          |
+//   dist(2, 0) -- top(2, 0) -- dist(2, 1) -- top(2, 1) -- dist(2, 2)
 
 fn main() {
     let mut args = std::env::args();
@@ -31,32 +38,32 @@ fn main() {
     for ch in puzzle.chars() {
         if ('0'..='3').contains(&ch) {
             cells.insert(idx, (ch as u8) - b'0');
-            idx += 1;
         } else {
-            idx += 1 + (ch as usize) - ('a' as usize);
+            idx += (ch as usize) - ('a' as usize);
         }
+        idx += 1;
     }
 
     let config = Config::new();
-    let context = Context::new(&config);
+    let ctx = Context::new(&config);
 
     let mut top = HashMap::new();
     let mut left = HashMap::new();
     for i in 0..=height {
         for j in 0..=width {
             if i != height {
-                left.insert((i, j), Bool::new_const(&context, format!("left_{}_{}", i, j)));
+                left.insert((i, j), Bool::fresh_const(&ctx, ""));
             }
             if j != width {
-                top.insert((i, j), Bool::new_const(&context, format!("top_{}_{}", i, j)));
+                top.insert((i, j), Bool::fresh_const(&ctx, ""));
             }
         }
     }
-    let solver = Solver::new(&context);
+    let solver = Solver::new(&ctx);
     for i in 0..height {
         for j in 0..width {
             if let Some(val) = cells.get(&(width * i + j)) {
-                let constraint = Bool::pb_eq(&context, &[
+                let constraint = Bool::pb_eq(&ctx, &[
                     (&top[&(i, j)], 1),
                     (&left[&(i, j)], 1),
                     (&top[&(i + 1, j)], 1),
@@ -66,7 +73,6 @@ fn main() {
             }
         }
     }
-    assert_eq!(solver.check(), SatResult::Sat);
     let mut constraints = Vec::with_capacity(4);
     for i in 0..=height {
         for j in 0..=width {
@@ -82,177 +88,90 @@ fn main() {
             if j > 0 {
                 constraints.push((&top[&(i, j - 1)], 1));
             }
-            let zero = Bool::pb_eq(&context, &constraints, 0);
-            let two = Bool::pb_eq(&context, &constraints, 2);
-            solver.assert(&Bool::or(&context, &[&zero, &two]));
+            let zero = Bool::pb_eq(&ctx, &constraints, 0);
+            let two = Bool::pb_eq(&ctx, &constraints, 2);
+            solver.assert(&Bool::or(&ctx, &[&zero, &two]));
             constraints.clear();
         }
     }
-    loop {
-        assert_eq!(solver.check(), SatResult::Sat);
-        let model = solver.get_model().unwrap();
+    let cell3 = *cells.iter().find(|(_, val)| **val == 3).unwrap().0;
+    let (row, col) = (cell3 / width, cell3 % width);
+    let mut dists = HashMap::new();
+    for i in 0..=height {
+        for j in 0..=width {
+            dists.insert((i, j), Int::fresh_const(&ctx, ""));
+        }
+    }
+    let zero = Int::from_u64(&ctx, 0);
+    let one = Int::from_u64(&ctx, 1);
+    for i in 0..=height {
+        for j in 0..=width {
+            let dist = dists.get(&(i, j)).unwrap();
+            if i == row && j == col {
+                solver.assert(&dist._eq(&zero));
+                continue;
+            }
+            let mut constraints = Vec::with_capacity(5);
+            let mut edges = Vec::with_capacity(4);
+            if let Some(neighbor) = dists.get(&(i + 1, j)) {
+                let edge = left.get(&(i, j)).unwrap();
+                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
+                constraints.push(Bool::and(&ctx, &[edge, &cond]));
+                edges.push(edge.not());
+            }
+            if let Some(neighbor) = dists.get(&(i - 1, j)) {
+                let edge = left.get(&(i - 1, j)).unwrap();
+                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
+                constraints.push(Bool::and(&ctx, &[edge, &cond]));
+                edges.push(edge.not());
+            }
+            if let Some(neighbor) = dists.get(&(i, j + 1)) {
+                let edge = top.get(&(i, j)).unwrap();
+                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
+                constraints.push(Bool::and(&ctx, &[edge, &cond]));
+                edges.push(edge.not());
+            }
+            if let Some(neighbor) = dists.get(&(i, j - 1)) {
+                let edge = top.get(&(i, j - 1)).unwrap();
+                let cond = dist._eq(&Int::add(&ctx, &[neighbor, &one]));
+                constraints.push(Bool::and(&ctx, &[edge, &cond]));
+                edges.push(edge.not());
+            }
+            let edges = edges.iter().collect::<Vec<_>>();
+            constraints.push(Bool::and(&ctx, &edges));
+            let constraints = constraints.iter().collect::<Vec<_>>();
+            solver.assert(&Bool::or(&ctx, &constraints));
+        }
+    }
 
-        for i in 0..=height {
-            for j in 0..width {
-                let line = model.eval(&top[&(i, j)], false).unwrap().as_bool().unwrap();
-                if line {
-                    print!("·───");
+    assert_eq!(solver.check(), SatResult::Sat);
+    let model = solver.get_model().unwrap();
+
+    for i in 0..=height {
+        for j in 0..width {
+            let line = model.eval(&top[&(i, j)], false).unwrap().as_bool().unwrap();
+            if line {
+                print!("·───");
+            } else {
+                print!("·   ");
+            }
+        }
+        println!("·  ");
+        if i < height {
+            for j in 0..=width {
+                let cell = if j < width {
+                    cells.get(&(width * i + j)).map(|c| (b'0' + c) as char).unwrap_or(' ')
                 } else {
-                    print!("·   ");
+                    ' '
+                };
+                let line = model.eval(&left[&(i, j)], false).unwrap().as_bool().unwrap();
+                if line {
+                    print!("│ {} ", cell);
+                } else {
+                    print!("  {} ", cell);
                 }
-            }
-            println!("·  ");
-            if i < height {
-                for j in 0..=width {
-                    let cell = if j < width {
-                        cells.get(&(width * i + j)).map(|c| (b'0' + c) as char).unwrap_or(' ')
-                    } else {
-                        ' '
-                    };
-                    let line = model.eval(&left[&(i, j)], false).unwrap().as_bool().unwrap();
-                    if line {
-                        print!("│ {} ", cell);
-                    } else {
-                        print!("  {} ", cell);
-                    }
-                }
-            }
-            println!();
-        }
-
-        let lines = top.values()
-            .chain(left.values())
-            .filter(|&bool| model.eval(bool, false).unwrap().as_bool().unwrap())
-            .count();
-        let mut min_chain = Vec::new();
-        let mut min_chain_len = lines;
-        for start in top.iter()
-                .filter(|(_, bool)| model.eval(*bool, false).unwrap().as_bool().unwrap())
-                .map(|(&coord, _)| coord) {
-            let (mut i, mut j) = start;
-            let mut chain = Vec::new();
-            chain.push(&top[&(i, j)]);
-            let mut dir = Direction::Top;
-            while chain.len() <= 1 || chain.last() != chain.get(0) {
-                match dir {
-                    Direction::Top => {
-                        if let Some(bool) = left.get(&(i-1, j+1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i -= 1;
-                                j += 1;
-                                dir = Direction::Left;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = top.get(&(i, j+1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                j += 1;
-                                dir = Direction::Top;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = left.get(&(i, j+1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                dir = Direction::Right;
-                                continue;
-                            }
-                        }
-                    }
-                    Direction::Right => {
-                        if let Some(bool) = top.get(&(i+1, j+1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i += 1;
-                                j += 1;
-                                dir = Direction::Top;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = left.get(&(i+1, j+1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i += 1;
-                                dir = Direction::Right;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = top.get(&(i+1, j)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                dir = Direction::Bottom;
-                                continue;
-                            }
-                        }
-                    }
-                    Direction::Bottom => {
-                        if let Some(bool) = left.get(&(i+1, j)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i += 1;
-                                j -= 1;
-                                dir = Direction::Right;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = top.get(&(i+1, j-1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                j -= 1;
-                                dir = Direction::Bottom;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = left.get(&(i, j)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                dir = Direction::Left;
-                                continue;
-                            }
-                        }
-                    }
-                    Direction::Left => {
-                        if let Some(bool) = top.get(&(i, j-1)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i -= 1;
-                                j -= 1;
-                                dir = Direction::Bottom;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = left.get(&(i-1, j)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                i -= 1;
-                                dir = Direction::Left;
-                                continue;
-                            }
-                        }
-                        if let Some(bool) = top.get(&(i, j)) {
-                            if model.eval(bool, false).unwrap().as_bool().unwrap() {
-                                chain.push(bool);
-                                dir = Direction::Top;
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-            chain.pop();
-            if chain.len() < min_chain_len {
-                min_chain = chain;
-                min_chain_len = min_chain.len();
             }
         }
-
-        println!("@@@@@@@@@@@@@@@@@@@@ min_chain.len() == {}, lines == {} @@@@@@@@@@@@@@@@@@@@", min_chain_len, lines);
         println!();
-        if min_chain_len == lines {
-            break;
-        }
-        solver.assert(&Bool::and(&context, &min_chain).not());
     }
 }
